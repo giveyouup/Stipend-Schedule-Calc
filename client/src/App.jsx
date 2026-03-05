@@ -275,7 +275,7 @@ function parseStipendXLSX(file) {
 // STIPEND CALCULATION
 // ─────────────────────────────────────────────
 const FIXED_CODES = new Set(["APS","BR","NIR","ROC"]);
-const WEEKEND_SENSITIVE = code => code === "APS" || /^G\d+$/.test(code);
+const WEEKEND_SENSITIVE = code => code === "APS" || code === "GI" || /^G\d+$/.test(code);
 
 function extractStipendCodes(title) {
   if (!title) return [];
@@ -283,6 +283,7 @@ function extractStipendCodes(title) {
   const matched = [];
   for (const t of tokens) {
     if (!t) continue;
+    if (t === "ENDO" || t === "GI") { matched.push("GI"); continue; }
     if (FIXED_CODES.has(t) || /^G\d+$/.test(t)) matched.push(t);
   }
   return [...new Set(matched)];
@@ -715,15 +716,22 @@ export default function App() {
   };
 
   const confirmStipendLabel = async () => {
+    const map = pendingStipendMap;
+    if (!map || Object.keys(map).length === 0) {
+      alert("No stipend data found — the spreadsheet may not have parsed correctly.");
+      setShowLabelModal(false);
+      return;
+    }
     const newVersion = {
       id: generateUUID(),
       label: pendingLabel.trim() || pendingFileName.replace(/\.[^.]+$/, "") || "Rates",
-      map: pendingStipendMap,
+      map,
       uploadedAt: Date.now(),
     };
     const newVersions = [...stipendVersions, newVersion];
     setStipendVersions(newVersions);
     setSelectedVersionId(newVersion.id);
+    setPendingStipendMap(null);
     setShowLabelModal(false);
     setSaving(true);
     await api.setSetting("stipendVersions", newVersions);
@@ -1005,7 +1013,7 @@ export default function App() {
                 >Delete</button>
                 <span style={{ color:"#334155", fontWeight:400, fontSize:10, marginLeft:"auto" }}>· click any amount to edit</span>
               </div>
-              {ver && (
+              {ver && ver.map && (
                 <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                   {Object.entries(ver.map).map(([k,val]) => {
                     const isWknd=k.endsWith("_WEEKEND"), isWkdy=k.endsWith("_WEEKDAY");
