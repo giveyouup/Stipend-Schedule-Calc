@@ -454,6 +454,52 @@ function exportToXLSX(eventsArr, getMapForMonth, holidaySet) {
   XLSX.writeFile(wb, "filtered_calendar_events.xlsx");
 }
 
+function exportYearlyToXLSX(yearlySummary, gVariants, fsVariants) {
+  const wb = XLSX.utils.book_new();
+
+  const hasG1  = yearlySummary.some(y => (y.counts["G1_WKD"]||0) + (y.counts["G1_WKE"]||0) > 0);
+  const hasG2  = yearlySummary.some(y => (y.counts["G2_WKD"]||0) + (y.counts["G2_WKE"]||0) > 0);
+  const hasAPS = yearlySummary.some(y => (y.counts["APS_WKD"]||0) + (y.counts["APS_WKE"]||0) > 0);
+  const specialCodes = ["GI","NIR","BR","ROC","CC"].filter(c => yearlySummary.some(y => y.counts[c] > 0));
+  const hasFS      = yearlySummary.some(y => y.counts["FS_TOTAL"] > 0);
+  const hasDaysOff = yearlySummary.some(y => y.vCount + y.hCount + y.postcallCount > 0);
+
+  const rows = yearlySummary.map(({ year, counts, totalEvents, weekendEvents, holidayEvents, vCount, hCount, postcallCount }) => {
+    const weekdayEvents = totalEvents - weekendEvents;
+    const row = {
+      "Year":                     year,
+      "Total Shifts":             totalEvents,
+      "Weekday Shifts":           weekdayEvents,
+      "Weekend/Holiday Shifts":   weekendEvents + holidayEvents,
+      "Weekend":                  weekendEvents,
+      "Holiday":                  holidayEvents,
+    };
+    if (hasG1)  { row["G1 WKD"] = counts["G1_WKD"]||0;  row["G1 WKE"] = counts["G1_WKE"]||0;  row["G1 Total"]  = (counts["G1_WKD"]||0)  + (counts["G1_WKE"]||0);  }
+    if (hasG2)  { row["G2 WKD"] = counts["G2_WKD"]||0;  row["G2 WKE"] = counts["G2_WKE"]||0;  row["G2 Total"]  = (counts["G2_WKD"]||0)  + (counts["G2_WKE"]||0);  }
+    if (hasAPS) { row["APS WKD"] = counts["APS_WKD"]||0; row["APS WKE"] = counts["APS_WKE"]||0; row["APS Total"] = (counts["APS_WKD"]||0) + (counts["APS_WKE"]||0); }
+    for (const g  of gVariants)     row[g]  = counts[g]  || 0;
+    for (const c  of specialCodes)  row[c]  = counts[c]  || 0;
+    if (hasFS) {
+      for (const fs of fsVariants)  row[fs] = counts[fs] || 0;
+      row["FS Total"] = counts["FS_TOTAL"] || 0;
+    }
+    if (hasDaysOff) {
+      row["Vacation (V)"]      = vCount;
+      row["Hosp. Holiday (H)"] = hCount;
+      row["Postcall"]          = postcallCount;
+      row["Total Days Off"]    = vCount + hCount + postcallCount;
+    }
+    return row;
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const numCols = rows.length > 0 ? Object.keys(rows[0]).length : 8;
+  ws["!cols"] = Array(numCols).fill({ wch: 18 });
+  ws["!cols"][0] = { wch: 8 };
+  XLSX.utils.book_append_sheet(wb, ws, "Yearly Shifts");
+  XLSX.writeFile(wb, "yearly_shift_summary.xlsx");
+}
+
 // ─────────────────────────────────────────────
 // UTILITIES
 // ─────────────────────────────────────────────
@@ -1270,19 +1316,22 @@ export default function App() {
                 <div style={{ background:"#141720", borderRadius:"0 8px 8px 8px", border:"1px solid #1e2535", padding:"20px 24px" }}>
 
                   {/* Year picker */}
-                  <div style={{ display:"flex", gap:6, marginBottom:20, flexWrap:"wrap" }}>
-                    {availYears.map(yr => (
-                      <button key={yr} onClick={()=>{
-                        setYearlyYear(yr);
-                        const now = new Date();
-                        const isCurrentYear = yr === now.getFullYear();
-                        const endMo = isCurrentYear ? String(now.getMonth()+1).padStart(2,"0") : "12";
-                        setFromMonth(`${yr}-01`);
-                        setToMonth(`${yr}-${endMo}`);
-                      }} style={{ background:displayYear===yr?"rgba(99,102,241,0.3)":"rgba(99,102,241,0.08)", border:`1px solid ${displayYear===yr?"#6366f1":"rgba(99,102,241,0.2)"}`, color:displayYear===yr?"#f1f5f9":"#a78bfa", padding:"5px 18px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>
-                        {yr}
-                      </button>
-                    ))}
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:8 }}>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {availYears.map(yr => (
+                        <button key={yr} onClick={()=>{
+                          setYearlyYear(yr);
+                          const now = new Date();
+                          const isCurrentYear = yr === now.getFullYear();
+                          const endMo = isCurrentYear ? String(now.getMonth()+1).padStart(2,"0") : "12";
+                          setFromMonth(`${yr}-01`);
+                          setToMonth(`${yr}-${endMo}`);
+                        }} style={{ background:displayYear===yr?"rgba(99,102,241,0.3)":"rgba(99,102,241,0.08)", border:`1px solid ${displayYear===yr?"#6366f1":"rgba(99,102,241,0.2)"}`, color:displayYear===yr?"#f1f5f9":"#a78bfa", padding:"5px 18px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>
+                          {yr}
+                        </button>
+                      ))}
+                    </div>
+                    <button onClick={()=>exportYearlyToXLSX(yearlySummary, yearlyGVariants, yearlyFSVariants)} style={{ background:"linear-gradient(135deg,#6366f1,#7c3aed)", border:"none", color:"#fff", padding:"8px 22px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>⬇ Export Yearly Summary</button>
                   </div>
 
                   {/* Stat cards */}
