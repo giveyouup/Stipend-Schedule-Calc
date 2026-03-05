@@ -181,7 +181,7 @@ app.delete("/api/all", (req, res) => {
 });
 
 // ── Serve React static build ────────────────────────────────────────────────
-const STATIC_DIR = path.join(__dirname, "../client/dist");
+const STATIC_DIR = path.join(__dirname, "client/dist");
 if (fs.existsSync(STATIC_DIR)) {
   app.use(express.static(STATIC_DIR));
   app.get("*", (req, res) => res.sendFile(path.join(STATIC_DIR, "index.html")));
