@@ -294,6 +294,7 @@ function extractShiftCodes(title) {
   const matched = [];
   for (const t of tokens) {
     if (!t) continue;
+    if (t === "ENDO") { matched.push("GI"); continue; }
     if (FIXED_CODES.has(t) || t === "GI" || /^G\d+$/.test(t) || /^FS\d+$/.test(t)) matched.push(t);
   }
   return [...new Set(matched)];
