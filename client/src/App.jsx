@@ -369,7 +369,7 @@ function buildYearlySummary(eventsArr, holidaySet) {
   for (const e of eventsArr) {
     if (!e.start) continue;
     const year = e.start.getFullYear();
-    if (!byYear[year]) byYear[year] = { counts: {}, totalEvents: 0, weekendEvents: 0, vCount: 0, hCount: 0, postcallCount: 0 };
+    if (!byYear[year]) byYear[year] = { counts: {}, totalEvents: 0, weekendEvents: 0, holidayEvents: 0, vCount: 0, hCount: 0, postcallCount: 0 };
     const data = byYear[year];
     const shiftCodes = extractShiftCodes(e.summary);
     const dayOffCodes = shiftCodes.length === 0 ? extractDayOffCodes(e.summary) : [];
@@ -380,8 +380,12 @@ function buildYearlySummary(eventsArr, holidaySet) {
       continue;
     }
     data.totalEvents++;
-    const isWke = isWeekendOrHoliday(e.start, holidaySet);
-    if (isWke) data.weekendEvents++;
+    const dow = e.start.getDay();
+    const isTrueWeekend = dow === 0 || dow === 6;
+    const isHoliday = !isTrueWeekend && holidaySet.has(fmtDate(e.start));
+    const isWke = isTrueWeekend || isHoliday;
+    if (isTrueWeekend) data.weekendEvents++;
+    if (isHoliday) data.holidayEvents++;
     for (const code of shiftCodes) {
       if (code === "G1" || code === "G2") {
         const key = isWke ? `${code}_WKE` : `${code}_WKD`;
@@ -402,7 +406,7 @@ function buildYearlySummary(eventsArr, holidaySet) {
 
   const years = Object.entries(byYear)
     .sort(([a], [b]) => Number(a) - Number(b))
-    .map(([year, { counts, totalEvents, weekendEvents, vCount, hCount, postcallCount }]) => ({ year: Number(year), counts, totalEvents, weekendEvents, vCount, hCount, postcallCount }));
+    .map(([year, { counts, totalEvents, weekendEvents, holidayEvents, vCount, hCount, postcallCount }]) => ({ year: Number(year), counts, totalEvents, weekendEvents, holidayEvents, vCount, hCount, postcallCount }));
   const sortedG  = [...gVariants].sort((a, b) => parseInt(a.slice(1))  - parseInt(b.slice(1)));
   const sortedFS = [...fsVariants].sort((a, b) => parseInt(a.slice(2)) - parseInt(b.slice(2)));
   return { years, gVariants: sortedG, fsVariants: sortedFS };
@@ -1220,7 +1224,7 @@ export default function App() {
               if (!availYears.length)
                 return <div style={{ background:"#141720", borderRadius:"0 8px 8px 8px", border:"1px solid #1e2535", padding:"32px", textAlign:"center", color:"#475569", fontSize:13 }}>No recognisable shift codes found in the selected range.</div>;
 
-              const { counts = {}, totalEvents = 0, weekendEvents = 0, vCount = 0, hCount = 0, postcallCount = 0 } = row || {};
+              const { counts = {}, totalEvents = 0, weekendEvents = 0, holidayEvents = 0, vCount = 0, hCount = 0, postcallCount = 0 } = row || {};
               const weekdayEvents = totalEvents - weekendEvents;
               const daysOffTotal = vCount + hCount + postcallCount;
               const g1Wkd = counts["G1_WKD"]||0, g1Wke = counts["G1_WKE"]||0, g1Total = g1Wkd+g1Wke;
@@ -1290,7 +1294,17 @@ export default function App() {
                     </div>
                     <div style={{ background:"#1c1400", border:"1px solid #3a2c00", borderRadius:10, padding:"16px 20px" }}>
                       <div style={{ fontSize:10, color:"#7a5a00", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>Weekend / Holiday</div>
-                      <div style={{ fontSize:34, fontWeight:700, color:"#f59e0b", lineHeight:1 }}>{weekendEvents}</div>
+                      <div style={{ fontSize:34, fontWeight:700, color:"#f59e0b", lineHeight:1 }}>{weekendEvents + holidayEvents}</div>
+                      {(weekendEvents > 0 || holidayEvents > 0) && (
+                        <div style={{ display:"flex", gap:10, marginTop:8 }}>
+                          <div style={{ fontSize:10, color:"#92400e" }}>
+                            <span style={{ color:"#fbbf24", fontWeight:600 }}>{weekendEvents}</span> wknd
+                          </div>
+                          <div style={{ fontSize:10, color:"#92400e" }}>
+                            <span style={{ color:"#fbbf24", fontWeight:600 }}>{holidayEvents}</span> hol
+                          </div>
+                        </div>
+                      )}
                     </div>
                     {daysOffTotal > 0 && (
                       <div style={{ background:"#0d1220", border:"1px solid #1e2a45", borderRadius:10, padding:"16px 20px" }}>
