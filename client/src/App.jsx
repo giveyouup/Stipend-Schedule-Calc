@@ -296,7 +296,7 @@ function extractShiftCodes(title) {
   for (const t of tokens) {
     if (!t) continue;
     if (t === "ENDO") { matched.push("GI"); continue; }
-    if (FIXED_CODES.has(t) || t === "GI" || /^G\d+$/.test(t) || /^FS\d+$/.test(t)) matched.push(t);
+    if (FIXED_CODES.has(t) || t === "GI" || t === "CC" || /^G\d+$/.test(t) || /^FS\d+$/.test(t)) matched.push(t);
   }
   return [...new Set(matched)];
 }
@@ -1236,6 +1236,7 @@ export default function App() {
                 {key:"NIR", color:"#fb7185", bg:"rgba(251,113,133,0.1)", bdr:"rgba(251,113,133,0.3)"},
                 {key:"BR",  color:"#38bdf8", bg:"rgba(56,189,248,0.1)",  bdr:"rgba(56,189,248,0.3)"},
                 {key:"ROC", color:"#a3e635", bg:"rgba(163,230,53,0.1)",  bdr:"rgba(163,230,53,0.3)"},
+                {key:"CC",  color:"#e879f9", bg:"rgba(232,121,249,0.1)", bdr:"rgba(232,121,249,0.3)"},
               ].filter(s => counts[s.key] > 0);
               const fsTotal = counts["FS_TOTAL"]||0;
               const fsItems = yearlyFSVariants.filter(fs => counts[fs] > 0);
