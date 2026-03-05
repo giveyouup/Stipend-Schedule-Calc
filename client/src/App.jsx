@@ -1000,7 +1000,7 @@ export default function App() {
       <div style={{ padding:"24px 40px", maxWidth:1100, margin:"0 auto" }}>
 
         {/* Upload row */}
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
           <DropZone
             label={hasStore
               ? <><span style={{color:"#a78bfa"}}>{fileName||"Calendar loaded"}</span><br/><span style={{color:"#64748b",fontSize:11}}>{Object.keys(eventStore).length} events · drop to merge</span></>
@@ -1556,10 +1556,12 @@ function GhostBtn({ onClick, children }) {
 function DropZone({ label, sublabel, icon, dragOver, onDragOver, onDragLeave, onDrop, onClick, accent="#6366f1" }) {
   return (
     <div onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onClick={onClick}
-      style={{ border:`2px dashed ${dragOver?accent:"#2d3748"}`, borderRadius:10, padding:"22px 20px", textAlign:"center", cursor:"pointer", background:dragOver?`${accent}0d`:"#141720", transition:"all 0.15s ease" }}>
-      <div style={{ fontSize:24, marginBottom:6 }}>{icon}</div>
-      <div style={{ color:"#94a3b8", fontSize:13 }}>{label}</div>
-      {sublabel && <div style={{ color:"#475569", fontSize:11, marginTop:4 }}>{sublabel}</div>}
+      style={{ border:`1px dashed ${dragOver?accent:"#2d3748"}`, borderRadius:7, padding:"9px 14px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", background:dragOver?`${accent}0d`:"#141720", transition:"all 0.15s ease" }}>
+      <div style={{ fontSize:15, lineHeight:1, flexShrink:0 }}>{icon}</div>
+      <div>
+        <div style={{ color:"#94a3b8", fontSize:12 }}>{label}</div>
+        {sublabel && <div style={{ color:"#475569", fontSize:10, marginTop:2 }}>{sublabel}</div>}
+      </div>
     </div>
   );
 }
