@@ -67,10 +67,11 @@ const api = {
 // ─────────────────────────────────────────────
 // STIPEND GROUPS
 // ─────────────────────────────────────────────
-const STIPEND_GROUPS = ["Main OR Call", "Other G", "APS", "BR", "NIR", "ROC"];
+const STIPEND_GROUPS = ["Main OR Call", "Other G", "GI", "APS", "BR", "NIR", "ROC"];
 const GROUP_COLOR = {
   "Main OR Call": "#c084fc",
   "Other G":      "#a78bfa",
+  "GI":           "#818cf8",
   "APS":          "#f59e0b",
   "BR":           "#38bdf8",
   "NIR":          "#fb7185",
@@ -78,6 +79,7 @@ const GROUP_COLOR = {
 };
 
 function getStipendGroup(code) {
+  if (code === "GI")  return "GI";
   if (code === "APS") return "APS";
   if (code === "BR")  return "BR";
   if (code === "NIR") return "NIR";
