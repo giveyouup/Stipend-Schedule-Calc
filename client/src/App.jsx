@@ -280,6 +280,27 @@ function extractStipendCodes(title) {
   return [...new Set(matched)];
 }
 
+function extractShiftCodes(title) {
+  if (!title) return [];
+  const tokens = title.toUpperCase().split(/[\s\-,\/()]+/);
+  const matched = [];
+  for (const t of tokens) {
+    if (!t) continue;
+    if (FIXED_CODES.has(t) || t === "GI" || /^G\d+$/.test(t) || /^FS\d+$/.test(t)) matched.push(t);
+  }
+  return [...new Set(matched)];
+}
+
+function extractDayOffCodes(title) {
+  if (!title) return [];
+  const tokens = title.toUpperCase().split(/[\s\-,\/()]+/).filter(Boolean);
+  const codes = [];
+  if (tokens.includes("V")) codes.push("V");
+  if (tokens.includes("H")) codes.push("H");
+  if (tokens.includes("POSTCALL") || /POST[\s\-]CALL/i.test(title)) codes.push("POSTCALL");
+  return codes;
+}
+
 function calcEventStipend(event, stipendMap, holidaySet) {
   if (!stipendMap || !Object.keys(stipendMap).length)
     return { codes:[], details:[], total:0, isWeekend:false };
@@ -325,6 +346,56 @@ function buildMonthlySummary(eventsArr, getMapForMonth, holidaySet) {
     const [yr,mo] = key.split("-").map(Number);
     return { month: key, key, label:`${MONTH_NAMES[mo-1]} ${yr}`, ...data };
   });
+}
+
+// ─────────────────────────────────────────────
+// YEARLY SHIFT SUMMARY
+// ─────────────────────────────────────────────
+function buildYearlySummary(eventsArr, holidaySet) {
+  const byYear = {};
+  const gVariants = new Set();
+  const fsVariants = new Set();
+
+  for (const e of eventsArr) {
+    if (!e.start) continue;
+    const year = e.start.getFullYear();
+    if (!byYear[year]) byYear[year] = { counts: {}, totalEvents: 0, weekendEvents: 0, vCount: 0, hCount: 0, postcallCount: 0 };
+    const data = byYear[year];
+    const shiftCodes = extractShiftCodes(e.summary);
+    const dayOffCodes = shiftCodes.length === 0 ? extractDayOffCodes(e.summary) : [];
+    if (dayOffCodes.length > 0) {
+      if (dayOffCodes.includes("V"))        data.vCount++;
+      if (dayOffCodes.includes("H"))        data.hCount++;
+      if (dayOffCodes.includes("POSTCALL")) data.postcallCount++;
+      continue;
+    }
+    data.totalEvents++;
+    const isWke = isWeekendOrHoliday(e.start, holidaySet);
+    if (isWke) data.weekendEvents++;
+    for (const code of shiftCodes) {
+      if (code === "G1" || code === "G2") {
+        const key = isWke ? `${code}_WKE` : `${code}_WKD`;
+        data.counts[key] = (data.counts[key] || 0) + 1;
+      } else if (code === "APS") {
+        const key = isWke ? "APS_WKE" : "APS_WKD";
+        data.counts[key] = (data.counts[key] || 0) + 1;
+      } else if (/^FS\d+$/.test(code)) {
+        data.counts[code] = (data.counts[code] || 0) + 1;
+        data.counts["FS_TOTAL"] = (data.counts["FS_TOTAL"] || 0) + 1;
+        fsVariants.add(code);
+      } else {
+        data.counts[code] = (data.counts[code] || 0) + 1;
+        if (/^G\d+$/.test(code)) gVariants.add(code);
+      }
+    }
+  }
+
+  const years = Object.entries(byYear)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([year, { counts, totalEvents, weekendEvents, vCount, hCount, postcallCount }]) => ({ year: Number(year), counts, totalEvents, weekendEvents, vCount, hCount, postcallCount }));
+  const sortedG  = [...gVariants].sort((a, b) => parseInt(a.slice(1))  - parseInt(b.slice(1)));
+  const sortedFS = [...fsVariants].sort((a, b) => parseInt(a.slice(2)) - parseInt(b.slice(2)));
+  return { years, gVariants: sortedG, fsVariants: sortedFS };
 }
 
 // ─────────────────────────────────────────────
@@ -428,6 +499,8 @@ export default function App() {
   const [pendingLabel,      setPendingLabel]      = useState("");
   const [pendingFileName,   setPendingFileName]   = useState("");
   const [selectedVersionId, setSelectedVersionId] = useState(null);
+  const [yearlyYear,        setYearlyYear]        = useState(null);
+  const [showUncoded,       setShowUncoded]       = useState(false);
 
   // ── Import / merge modal ──
   const [pendingParsed,  setPendingParsed]  = useState(null);
@@ -524,9 +597,22 @@ export default function App() {
   }
 
   const monthlySummary = filtered.length > 0 && stipendVersions.length > 0 ? buildMonthlySummary(filtered, getStipendMapForMonth, holidaySet) : [];
+  const { years: yearlySummary, gVariants: yearlyGVariants, fsVariants: yearlyFSVariants } =
+    filtered.length > 0 ? buildYearlySummary(filtered, holidaySet) : { years: [], gVariants: [], fsVariants: [] };
   const totalStipend = filtered.reduce((s,e) => s + calcEventStipend(e, getStipendMapForMonth(fmtYYYYMM(e.start)), holidaySet).total, 0);
   const weekendCount = filtered.filter(e => isWeekendOrHoliday(e.start,holidaySet)).length;
   const groupTotals  = Object.fromEntries(STIPEND_GROUPS.map(g=>[g, monthlySummary.reduce((s,r)=>s+(r.byGroup[g]||0),0)]));
+  const uncodedEvents = filtered.filter(e => extractStipendCodes(e.summary).length === 0 && extractDayOffCodes(e.summary).length === 0);
+  const uncodedCount  = uncodedEvents.length;
+  const holidayAudit  = filtered
+    .filter(e => e.start && holidaySet.has(fmtDate(e.start)) && extractDayOffCodes(e.summary).length === 0)
+    .map(e => {
+      const dateStr = fmtDate(e.start);
+      const holidayName = federalMap[dateStr] || "Custom Holiday";
+      const { details, total } = calcEventStipend(e, getStipendMapForMonth(fmtYYYYMM(e.start)), holidaySet);
+      return { event: e, dateStr, holidayName, details, total };
+    })
+    .sort((a, b) => a.event.start - b.event.start);
   const importOpts   = pendingParsed ? getMonthOptions(pendingParsed) : [];
 
   // ── Auto-assign latest version to unassigned months ──
@@ -721,9 +807,12 @@ export default function App() {
               </div>
             </div>
             <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:16 }}>
-              {[...new Set(importOpts.map(k=>k.slice(0,4)))].map(yr=>(
-                <button key={yr} onClick={()=>{setImportFrom(`${yr}-01`);setImportTo(`${yr}-12`);}} style={{...quickBtnStyle,background:"rgba(99,102,241,0.1)",border:"1px solid rgba(99,102,241,0.25)"}}>{yr}</button>
-              ))}
+              {[...new Set(importOpts.map(k=>k.slice(0,4)))].map(yr=>{
+                const now = new Date();
+                const isCurrentYear = parseInt(yr) === now.getFullYear();
+                const endMo = isCurrentYear ? String(now.getMonth()+1).padStart(2,"0") : "12";
+                return <button key={yr} onClick={()=>{setImportFrom(`${yr}-01`);setImportTo(`${yr}-${endMo}`);}} style={{...quickBtnStyle,background:"rgba(99,102,241,0.1)",border:"1px solid rgba(99,102,241,0.25)"}}>{yr}</button>;
+              })}
               <button onClick={()=>{setImportFrom(importOpts[0]);setImportTo(importOpts[importOpts.length-1]);}} style={{...quickBtnStyle,background:"rgba(99,102,241,0.1)",border:"1px solid rgba(99,102,241,0.25)"}}>All</button>
             </div>
             <div style={{ fontSize:11, color:"#64748b", marginBottom:18 }}>
@@ -823,7 +912,7 @@ export default function App() {
       <div style={{ borderBottom:"1px solid #2d3748", padding:"18px 40px", display:"flex", alignItems:"center", gap:16 }}>
         <div style={{ width:36, height:36, borderRadius:8, background:"linear-gradient(135deg,#6366f1,#a78bfa)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>📅</div>
         <div>
-          <div style={{ fontSize:17, fontWeight:700, letterSpacing:"-0.02em", color:"#f1f5f9" }}>Calendar Filter</div>
+          <div style={{ fontSize:17, fontWeight:700, letterSpacing:"-0.02em", color:"#f1f5f9" }}>Bijan's Stipend and Schedule Calculator</div>
           <div style={{ fontSize:11, color:"#64748b" }}>Extract events · Calculate stipends · Export to Excel</div>
         </div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
@@ -949,8 +1038,11 @@ export default function App() {
               </div>
               <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                 {[...new Set(monthOptions.map(k=>k.slice(0,4)))].map(yr => {
-                  const active=fromMonth===`${yr}-01`&&toMonth===`${yr}-12`;
-                  return <button key={yr} onClick={()=>{setFromMonth(`${yr}-01`);setToMonth(`${yr}-12`);}} style={{...quickBtnStyle,background:active?"rgba(99,102,241,0.3)":"rgba(99,102,241,0.08)",border:`1px solid ${active?"#6366f1":"rgba(99,102,241,0.2)"}`}}>{yr}</button>;
+                  const now = new Date();
+                  const isCurrentYear = parseInt(yr) === now.getFullYear();
+                  const endMo = isCurrentYear ? String(now.getMonth()+1).padStart(2,"0") : "12";
+                  const active=fromMonth===`${yr}-01`&&toMonth===`${yr}-${endMo}`;
+                  return <button key={yr} onClick={()=>{setFromMonth(`${yr}-01`);setToMonth(`${yr}-${endMo}`);}} style={{...quickBtnStyle,background:active?"rgba(99,102,241,0.3)":"rgba(99,102,241,0.08)",border:`1px solid ${active?"#6366f1":"rgba(99,102,241,0.2)"}`}}>{yr}</button>;
                 })}
                 <button onClick={()=>{ if(monthOptions.length){setFromMonth(monthOptions[0]);setToMonth(monthOptions[monthOptions.length-1]);} }} style={{...quickBtnStyle,background:"rgba(99,102,241,0.08)",border:"1px solid rgba(99,102,241,0.2)"}}>All</button>
               </div>
@@ -1013,15 +1105,23 @@ export default function App() {
         {hasStore && filtered.length > 0 && (
           <>
             <div style={{ display:"flex", gap:2, borderBottom:"1px solid #1e2535" }}>
-              {["events",...(stipendVersions.length>0?["summary"]:[])].map(tab=>(
-                <button key={tab} onClick={()=>setActiveTab(tab)} style={{ background:activeTab===tab?"#141720":"transparent", border:"1px solid "+(activeTab===tab?"#1e2535":"transparent"), borderBottom:activeTab===tab?"1px solid #141720":"1px solid transparent", borderRadius:"6px 6px 0 0", color:activeTab===tab?"#f1f5f9":"#64748b", padding:"7px 18px", fontSize:11, cursor:"pointer", fontFamily:"inherit", textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:600, marginBottom:-1 }}>
-                  {tab==="events"?`Events (${filtered.length})`:"Monthly Summary"}
+              {["events",...(stipendVersions.length>0?["summary"]:[]),"yearly","audit"].map(tab=>(
+                <button key={tab} onClick={()=>setActiveTab(tab)} style={{ background:activeTab===tab?"#141720":"transparent", border:"1px solid "+(activeTab===tab?"#1e2535":"transparent"), borderBottom:activeTab===tab?"1px solid #141720":"1px solid transparent", borderRadius:"6px 6px 0 0", color:activeTab===tab?"#f1f5f9":"#64748b", padding:"7px 18px", fontSize:11, cursor:"pointer", fontFamily:"inherit", textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:600, marginBottom:-1, display:"flex", alignItems:"center", gap:6 }}>
+                  {tab==="events"?<>{`Events (${filtered.length})`}{uncodedCount>0&&<span style={{background:"rgba(245,158,11,0.2)",color:"#f59e0b",borderRadius:10,padding:"1px 7px",fontSize:9,fontWeight:700}}>{uncodedCount} ⚠</span>}</>:tab==="summary"?"Monthly Summary":tab==="yearly"?"Yearly Shifts":<>{"Holiday Audit"}{holidayAudit.length>0&&<span style={{background:"rgba(251,113,133,0.2)",color:"#fb7185",borderRadius:10,padding:"1px 7px",fontSize:9,fontWeight:700}}>{holidayAudit.length}</span>}</>}
                 </button>
               ))}
             </div>
 
             {activeTab==="events" && (
               <div style={{ background:"#141720", borderRadius:"0 8px 8px 8px", border:"1px solid #1e2535", overflow:"hidden" }}>
+                {uncodedCount > 0 && (
+                  <div style={{ padding:"7px 14px", borderBottom:"1px solid #1e2535", display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontSize:11, color:"#f59e0b" }}>⚠ {uncodedCount} event{uncodedCount!==1?"s":""} with no recognised shift code</span>
+                    <button onClick={()=>setShowUncoded(p=>!p)} style={{ background:showUncoded?"rgba(245,158,11,0.2)":"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.3)", color:"#f59e0b", padding:"3px 10px", borderRadius:5, cursor:"pointer", fontSize:10, fontFamily:"inherit", fontWeight:600 }}>
+                      {showUncoded?"Show all":"Uncoded only"}
+                    </button>
+                  </div>
+                )}
                 <div style={{ overflowX:"auto", maxHeight:440, overflowY:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                     <thead>
@@ -1030,14 +1130,15 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.slice(0,300).map((e,i) => {
+                      {(showUncoded ? uncodedEvents : filtered).slice(0,300).map((e,i) => {
                         const { details, total, isWeekend } = calcEventStipend(e, getStipendMapForMonth(fmtYYYYMM(e.start)), holidaySet);
+                        const uncoded = details.length === 0 && extractDayOffCodes(e.summary).length === 0;
                         return (
-                          <tr key={e.uid||i} style={{ borderBottom:"1px solid #1a2030", background:i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
+                          <tr key={e.uid||i} style={{ borderBottom:"1px solid #1a2030", background: uncoded ? "rgba(245,158,11,0.05)" : i%2===0?"transparent":"rgba(255,255,255,0.01)", borderLeft: uncoded ? "3px solid rgba(245,158,11,0.5)" : "3px solid transparent" }}>
                             <td style={cellStyle}>{e.summary||"—"}</td>
                             <td style={{...cellStyle,whiteSpace:"nowrap",color:"#a78bfa"}}>{e.start?e.start.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"—"}</td>
                             <td style={{...cellStyle,whiteSpace:"nowrap"}}>{e.start?<span style={{color:isWeekend?"#f59e0b":"#34d399",fontSize:10,fontWeight:600}}>{isWeekend?"⛅ WKD/HOL":"📅 WEEKDAY"}</span>:"—"}</td>
-                            <td style={{...cellStyle,color:details.length?"#fbbf24":"#475569",fontSize:11}}>{details.length?details.map(d=>d.rateKey).join(", "):"—"}</td>
+                            <td style={{...cellStyle,fontSize:11}}>{details.length?<span style={{color:"#fbbf24"}}>{details.map(d=>d.rateKey).join(", ")}</span>:<span style={{color:"#f59e0b",fontWeight:600}}>⚠ no code</span>}</td>
                             <td style={{...cellStyle,color:total>0?"#34d399":"#475569",fontWeight:total>0?700:400}}>{total>0?`$${total.toFixed(2)}`:"—"}</td>
                             <td style={cellStyle}>{e.location||"—"}</td>
                           </tr>
@@ -1046,7 +1147,7 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
-                {filtered.length>300&&<div style={{ padding:"7px 14px", color:"#64748b", fontSize:11, borderTop:"1px solid #1e2535" }}>Showing first 300 of {filtered.length}. All will be exported.</div>}
+                {(showUncoded ? uncodedEvents : filtered).length>300&&<div style={{ padding:"7px 14px", color:"#64748b", fontSize:11, borderTop:"1px solid #1e2535" }}>Showing first 300 of {(showUncoded?uncodedEvents:filtered).length}. All will be exported.</div>}
               </div>
             )}
 
@@ -1091,6 +1192,238 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {activeTab==="yearly" && (() => {
+              const availYears = yearlySummary.map(y => y.year);
+              const displayYear = (yearlyYear && availYears.includes(yearlyYear)) ? yearlyYear : (availYears.at(-1) ?? null);
+              const row = yearlySummary.find(y => y.year === displayYear);
+
+              if (!availYears.length)
+                return <div style={{ background:"#141720", borderRadius:"0 8px 8px 8px", border:"1px solid #1e2535", padding:"32px", textAlign:"center", color:"#475569", fontSize:13 }}>No recognisable shift codes found in the selected range.</div>;
+
+              const { counts = {}, totalEvents = 0, weekendEvents = 0, vCount = 0, hCount = 0, postcallCount = 0 } = row || {};
+              const weekdayEvents = totalEvents - weekendEvents;
+              const daysOffTotal = vCount + hCount + postcallCount;
+              const g1Wkd = counts["G1_WKD"]||0, g1Wke = counts["G1_WKE"]||0, g1Total = g1Wkd+g1Wke;
+              const g2Wkd = counts["G2_WKD"]||0, g2Wke = counts["G2_WKE"]||0, g2Total = g2Wkd+g2Wke;
+              const apsWkd = counts["APS_WKD"]||0, apsWke = counts["APS_WKE"]||0, apsTotal = apsWkd+apsWke;
+              const otherG = yearlyGVariants.filter(g => counts[g] > 0);
+              const specials = [
+                {key:"GI",  color:"#818cf8", bg:"rgba(129,140,248,0.1)", bdr:"rgba(129,140,248,0.3)"},
+                {key:"NIR", color:"#fb7185", bg:"rgba(251,113,133,0.1)", bdr:"rgba(251,113,133,0.3)"},
+                {key:"BR",  color:"#38bdf8", bg:"rgba(56,189,248,0.1)",  bdr:"rgba(56,189,248,0.3)"},
+                {key:"ROC", color:"#a3e635", bg:"rgba(163,230,53,0.1)",  bdr:"rgba(163,230,53,0.3)"},
+              ].filter(s => counts[s.key] > 0);
+              const fsTotal = counts["FS_TOTAL"]||0;
+              const fsItems = yearlyFSVariants.filter(fs => counts[fs] > 0);
+
+              const miniBar = (a, b) => {
+                const tot = a + b; if (!tot) return null;
+                return (
+                  <div style={{ height:5, borderRadius:3, background:"#f59e0b", overflow:"hidden", margin:"8px 0 6px" }}>
+                    <div style={{ width:`${(a/tot*100).toFixed(1)}%`, height:"100%", background:"#34d399" }} />
+                  </div>
+                );
+              };
+
+              const gCard = (code, total, wkd, wke, accent) => total > 0 && (
+                <div style={{ background:`rgba(${accent},0.07)`, border:`1px solid rgba(${accent},0.28)`, borderRadius:10, padding:"14px 18px", minWidth:150 }}>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:2 }}>
+                    <span style={{ fontSize:15, fontWeight:700, color:`rgba(${accent},1)` }}>{code}</span>
+                    <span style={{ fontSize:26, fontWeight:700, color:"#f1f5f9", lineHeight:1 }}>{total}</span>
+                  </div>
+                  {miniBar(wkd, wke)}
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11 }}>
+                    <span style={{ color:"#34d399" }}>WKD&nbsp;<strong>{wkd}</strong></span>
+                    <span style={{ color:"#f59e0b" }}>WKE&nbsp;<strong>{wke}</strong></span>
+                  </div>
+                </div>
+              );
+
+              return (
+                <div style={{ background:"#141720", borderRadius:"0 8px 8px 8px", border:"1px solid #1e2535", padding:"20px 24px" }}>
+
+                  {/* Year picker */}
+                  <div style={{ display:"flex", gap:6, marginBottom:20, flexWrap:"wrap" }}>
+                    {availYears.map(yr => (
+                      <button key={yr} onClick={()=>{
+                        setYearlyYear(yr);
+                        const now = new Date();
+                        const isCurrentYear = yr === now.getFullYear();
+                        const endMo = isCurrentYear ? String(now.getMonth()+1).padStart(2,"0") : "12";
+                        setFromMonth(`${yr}-01`);
+                        setToMonth(`${yr}-${endMo}`);
+                      }} style={{ background:displayYear===yr?"rgba(99,102,241,0.3)":"rgba(99,102,241,0.08)", border:`1px solid ${displayYear===yr?"#6366f1":"rgba(99,102,241,0.2)"}`, color:displayYear===yr?"#f1f5f9":"#a78bfa", padding:"5px 18px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit", fontWeight:600 }}>
+                        {yr}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Stat cards */}
+                  <div style={{ display:"grid", gridTemplateColumns:`repeat(${daysOffTotal>0?4:3},1fr)`, gap:12, marginBottom:22 }}>
+                    <div style={{ background:"#0f1117", border:"1px solid #1e2535", borderRadius:10, padding:"16px 20px" }}>
+                      <div style={{ fontSize:10, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>Total Shifts</div>
+                      <div style={{ fontSize:34, fontWeight:700, color:"#f1f5f9", lineHeight:1 }}>{totalEvents}</div>
+                    </div>
+                    <div style={{ background:"#0d1a10", border:"1px solid #1a3320", borderRadius:10, padding:"16px 20px" }}>
+                      <div style={{ fontSize:10, color:"#4b7a64", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>Weekday Shifts</div>
+                      <div style={{ fontSize:34, fontWeight:700, color:"#34d399", lineHeight:1 }}>{weekdayEvents}</div>
+                    </div>
+                    <div style={{ background:"#1c1400", border:"1px solid #3a2c00", borderRadius:10, padding:"16px 20px" }}>
+                      <div style={{ fontSize:10, color:"#7a5a00", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>Weekend / Holiday</div>
+                      <div style={{ fontSize:34, fontWeight:700, color:"#f59e0b", lineHeight:1 }}>{weekendEvents}</div>
+                    </div>
+                    {daysOffTotal > 0 && (
+                      <div style={{ background:"#0d1220", border:"1px solid #1e2a45", borderRadius:10, padding:"16px 20px" }}>
+                        <div style={{ fontSize:10, color:"#3d5a8a", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>Days Off</div>
+                        <div style={{ fontSize:34, fontWeight:700, color:"#60a5fa", lineHeight:1 }}>{daysOffTotal}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* G & APS Shifts */}
+                  {(g1Total > 0 || g2Total > 0 || apsTotal > 0 || otherG.length > 0) && (
+                    <div style={{ marginBottom:20 }}>
+                      <div style={{ fontSize:10, color:"#475569", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:10 }}>G &amp; APS Shifts</div>
+                      <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"flex-start" }}>
+                        {gCard("G1", g1Total, g1Wkd, g1Wke, "192,132,252")}
+                        {gCard("G2", g2Total, g2Wkd, g2Wke, "167,139,250")}
+                        {gCard("APS", apsTotal, apsWkd, apsWke, "245,158,11")}
+                        {otherG.length > 0 && (
+                          <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignContent:"flex-start", paddingTop:2 }}>
+                            {otherG.map(g => (
+                              <div key={g} style={{ background:"rgba(129,140,248,0.07)", border:"1px solid rgba(129,140,248,0.22)", borderRadius:8, padding:"10px 14px", textAlign:"center", minWidth:56 }}>
+                                <div style={{ fontSize:10, color:"#818cf8", fontWeight:600, marginBottom:4 }}>{g}</div>
+                                <div style={{ fontSize:20, fontWeight:700, color:"#f1f5f9" }}>{counts[g]}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Special shifts */}
+                  {specials.length > 0 && (
+                    <div style={{ marginBottom:20 }}>
+                      <div style={{ fontSize:10, color:"#475569", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:10 }}>Special Shifts</div>
+                      <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                        {specials.map(s => (
+                          <div key={s.key} style={{ background:s.bg, border:`1px solid ${s.bdr}`, borderRadius:8, padding:"10px 16px", textAlign:"center", minWidth:64 }}>
+                            <div style={{ fontSize:10, color:s.color, fontWeight:600, marginBottom:4 }}>{s.key}</div>
+                            <div style={{ fontSize:24, fontWeight:700, color:"#f1f5f9" }}>{counts[s.key]}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* FS shifts */}
+                  {fsTotal > 0 && (
+                    <div>
+                      <div style={{ fontSize:10, color:"#475569", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:10 }}>FS Shifts</div>
+                      <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                        <div style={{ background:"rgba(52,211,153,0.1)", border:"1px solid rgba(52,211,153,0.35)", borderRadius:8, padding:"10px 16px", textAlign:"center", minWidth:64 }}>
+                          <div style={{ fontSize:10, color:"#34d399", fontWeight:600, marginBottom:4 }}>FS (all)</div>
+                          <div style={{ fontSize:24, fontWeight:700, color:"#34d399" }}>{fsTotal}</div>
+                        </div>
+                        {fsItems.map(fs => (
+                          <div key={fs} style={{ background:"rgba(52,211,153,0.06)", border:"1px solid rgba(52,211,153,0.2)", borderRadius:8, padding:"10px 14px", textAlign:"center", minWidth:56 }}>
+                            <div style={{ fontSize:10, color:"#34d399", fontWeight:600, marginBottom:4 }}>{fs}</div>
+                            <div style={{ fontSize:20, fontWeight:700, color:"#f1f5f9" }}>{counts[fs]}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Days Off */}
+                  {daysOffTotal > 0 && (
+                    <div style={{ marginTop:20 }}>
+                      <div style={{ fontSize:10, color:"#475569", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:10 }}>Days Off</div>
+                      <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                        {vCount > 0 && (
+                          <div style={{ background:"rgba(96,165,250,0.1)", border:"1px solid rgba(96,165,250,0.35)", borderRadius:8, padding:"10px 16px", textAlign:"center", minWidth:80 }}>
+                            <div style={{ fontSize:10, color:"#60a5fa", fontWeight:600, marginBottom:4 }}>Vacation (V)</div>
+                            <div style={{ fontSize:24, fontWeight:700, color:"#f1f5f9" }}>{vCount}</div>
+                          </div>
+                        )}
+                        {hCount > 0 && (
+                          <div style={{ background:"rgba(96,165,250,0.06)", border:"1px solid rgba(96,165,250,0.22)", borderRadius:8, padding:"10px 16px", textAlign:"center", minWidth:80 }}>
+                            <div style={{ fontSize:10, color:"#60a5fa", fontWeight:600, marginBottom:4 }}>Hosp. Holiday (H)</div>
+                            <div style={{ fontSize:24, fontWeight:700, color:"#f1f5f9" }}>{hCount}</div>
+                          </div>
+                        )}
+                        {postcallCount > 0 && (
+                          <div style={{ background:"rgba(96,165,250,0.04)", border:"1px solid rgba(96,165,250,0.18)", borderRadius:8, padding:"10px 16px", textAlign:"center", minWidth:80 }}>
+                            <div style={{ fontSize:10, color:"#60a5fa", fontWeight:600, marginBottom:4 }}>Postcall</div>
+                            <div style={{ fontSize:24, fontWeight:700, color:"#f1f5f9" }}>{postcallCount}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {totalEvents === 0 && daysOffTotal === 0 && (
+                    <div style={{ textAlign:"center", color:"#475569", padding:"16px", fontSize:13 }}>No recognisable shift codes in {displayYear}.</div>
+                  )}
+                </div>
+              );
+            })()}
+            {activeTab==="audit" && (
+              <div style={{ background:"#141720", borderRadius:"0 8px 8px 8px", border:"1px solid #1e2535", overflow:"hidden" }}>
+                {holidayAudit.length === 0 ? (
+                  <div style={{ padding:"48px 24px", textAlign:"center", color:"#475569", fontSize:13 }}>No events fell on holidays in the selected range.</div>
+                ) : (
+                  <>
+                    <div style={{ padding:"8px 14px", borderBottom:"1px solid #1e2535", fontSize:11, color:"#64748b" }}>
+                      {holidayAudit.length} event{holidayAudit.length!==1?"s":""} on holidays · confirming holiday rates were applied
+                    </div>
+                    <div style={{ overflowX:"auto" }}>
+                      <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                        <thead>
+                          <tr style={{ background:"#0f1117" }}>
+                            <th style={thStyle}>Date</th>
+                            <th style={{...thStyle,color:"#fb7185"}}>Holiday</th>
+                            <th style={thStyle}>Event Title</th>
+                            <th style={thStyle}>Rates Applied</th>
+                            <th style={{...thStyle,color:"#34d399"}}>Stipend ($)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {holidayAudit.map(({event:e, dateStr, holidayName, details, total},i) => {
+                            const rateOk = details.every(d => d.rateKey.endsWith("_WEEKEND") || !d.rateKey.includes("_"));
+                            return (
+                              <tr key={e.uid||i} style={{ borderBottom:"1px solid #1a2030", background:i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
+                                <td style={{...cellStyle,whiteSpace:"nowrap",color:"#f59e0b",fontWeight:600}}>{new Date(dateStr+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"})}</td>
+                                <td style={{...cellStyle,whiteSpace:"nowrap"}}>
+                                  <span style={{ background:"rgba(251,113,133,0.1)", border:"1px solid rgba(251,113,133,0.25)", borderRadius:4, padding:"2px 8px", color:"#fb7185", fontSize:10, fontWeight:600 }}>{holidayName}</span>
+                                </td>
+                                <td style={cellStyle}>{e.summary||"—"}</td>
+                                <td style={{...cellStyle,fontSize:11}}>
+                                  {details.length
+                                    ? details.map(d => (
+                                        <span key={d.rateKey} style={{ display:"inline-block", marginRight:4, color: d.rateKey.endsWith("_WEEKEND") ? "#34d399" : d.rateKey.includes("_") ? "#f59e0b" : "#94a3b8" }}>{d.rateKey}</span>
+                                      ))
+                                    : <span style={{color:"#475569"}}>—</span>}
+                                </td>
+                                <td style={{...cellStyle,color:total>0?"#34d399":"#475569",fontWeight:total>0?700:400,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{total>0?`$${total.toFixed(2)}`:"—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ borderTop:"2px solid #2d3748", background:"#0f1117" }}>
+                            <td colSpan={4} style={{...cellStyle,color:"#f1f5f9",fontWeight:700}}>TOTAL</td>
+                            <td style={{...cellStyle,color:"#34d399",fontWeight:700,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>${holidayAudit.reduce((s,r)=>s+r.total,0).toFixed(2)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </>

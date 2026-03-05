@@ -1,0 +1,12 @@
+services:
+  calfilter:
+    build: .
+    container_name: calfilter
+    restart: unless-stopped
+    ports:
+      - "3000:3000"       # Change left side to use a different host port, e.g. "8080:3000"
+    volumes:
+      - calfilter-data:/data  # SQLite database lives here — persists across updates
+
+volumes:
+  calfilter-data:
