@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 
+function generateUUID() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
 // ─────────────────────────────────────────────
 // API CLIENT
 // Thin wrapper around fetch — all data lives on the server.
@@ -525,7 +533,7 @@ export default function App() {
           setStipendVersions(settings.stipendVersions);
         } else if (settings.stipendMap) {
           const migrated = [{
-            id: crypto.randomUUID(),
+            id: generateUUID(),
             label: settings.stipendFileName || "Imported rates",
             map: settings.stipendMap,
             uploadedAt: Date.now(),
@@ -707,7 +715,7 @@ export default function App() {
 
   const confirmStipendLabel = async () => {
     const newVersion = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       label: pendingLabel.trim() || pendingFileName.replace(/\.[^.]+$/, "") || "Rates",
       map: pendingStipendMap,
       uploadedAt: Date.now(),
